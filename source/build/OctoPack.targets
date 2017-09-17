@@ -1,14 +1,6 @@
 <Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <UsingTask TaskName="OctoPack.Tasks.CreateOctoPackPackage" AssemblyFile="OctoPack.Tasks.dll" />
   <UsingTask TaskName="OctoPack.Tasks.GetAssemblyVersionInfo" AssemblyFile="OctoPack.Tasks.dll" />
-
-  <!-- Hook into the AfterBuild activity -->
-  <PropertyGroup>
-    <BuildDependsOn>
-      $(BuildDependsOn);
-      OctoPack
-    </BuildDependsOn>
-  </PropertyGroup>
   
   <!--
   Configuration properties - you can override these from the command line
@@ -17,6 +9,7 @@
     <OctoPackImported>true</OctoPackImported>
 
     <RunOctoPack Condition="'$(RunOctoPack)'==''">false</RunOctoPack>
+    <OctoPackSkipIfNoChanges Condition="'$(OctoPackSkipIfNoChanges)'==''">false</OctoPackSkipIfNoChanges>
     <OctoPackIncludeTypeScriptSourceFiles Condition="'$(OctoPackIncludeTypeScriptSourceFiles)'==''">false</OctoPackIncludeTypeScriptSourceFiles>
     <OctoPackNuSpecFileName Condition="'$(OctoPackNuSpecFileName)' == ''"></OctoPackNuSpecFileName>
     <OctoPackAppendToPackageId Condition="'$(OctoPackAppendToPackageId)' == ''"></OctoPackAppendToPackageId>
@@ -39,11 +32,12 @@
     <OctoPackUseFileVersion Condition="'$(OctoPackUseFileVersion)' == ''">false</OctoPackUseFileVersion>
     <OctoPackUseProductVersion Condition="'$(OctoPackUseProductVersion)' == ''">false</OctoPackUseProductVersion>
   </PropertyGroup>
-
+  
+  
   <!-- 
   Create Octopus Deploy package
   -->
-  <Target Name="OctoPack" Condition="$(RunOctoPack)">
+  <Target Name="OctoPack">
     <GetAssemblyVersionInfo UseFileVersion="$(OctoPackUseFileVersion)" UseProductVersion="$(OctoPackUseProductVersion)" AssemblyFiles="$(TargetPath)" Condition="'$(OctoPackPackageVersion)' == ''">
       <Output TaskParameter="AssemblyVersionInfo" ItemName="AssemblyVersions"/>
     </GetAssemblyVersionInfo>
@@ -56,23 +50,16 @@
     <PropertyGroup>
       <OctoPackNuGetProperties Condition="'$(OctoPackNuGetProperties)' == ''"></OctoPackNuGetProperties>
     </PropertyGroup>
-	<!--
-		Append project name so that you can nest packages in a structure such as [orgName]/[PackageName]/PackageName.Version.nupkg
-	-->
+    <!--
+        Append project name so that you can nest packages in a structure such as [orgName]/[PackageName]/PackageName.Version.nupkg
+    -->
     <PropertyGroup>
       <OctoPackPublishPackageToHttp Condition="'$(OctoPackPublishPackageToHttp)' != '' AND '$(OctoPackAppendProjectToFeed)'">$(OctoPackPublishPackageToHttp)/$(MSBuildProjectName)</OctoPackPublishPackageToHttp>
     </PropertyGroup>
 
     <Message Text="Using package version: $(OctoPackPackageVersion)" />
 
-    <ItemGroup>
 
-      <OctoPackWrittenFiles Include="@(FileWrites)" Exclude="$(IntermediateOutputPath)**\*" />
-      <OctoPackWrittenFiles Include="@(FileWritesShareable)" Exclude="$(IntermediateOutputPath)**\*" />
-      
-      <OctoPackContentFiles Include="@(Content)" />
-      <OctoPackContentFiles Include="@(TypeScriptCompile)" />
-    </ItemGroup>
     
     <CreateOctoPackPackage
       NuSpecFileName="$(OctoPackNuSpecFileName)"
@@ -107,5 +94,50 @@
 
     <Message Text="Publish to repository: $(OctoPackPublishPackageToHttp)" Condition="'$(OctoPackPublishPackageToHttp)' != ''" Importance="Normal" />
     <Exec Command='"$(OctoPackNuGetExePath)" push "@(OctoPackBuiltPackages)" $(OctoPackPublishApiKey) -Source $(OctoPackPublishPackageToHttp) $(OctoPackNuGetPushProperties)' Condition="'$(OctoPackPublishPackageToHttp)' != ''" />
+  </Target>
+  
+  <Target Name="OctoPackDebugMessage" DependsOnTargets="OctoPackInitItemGroups" BeforeTargets="OctoPack" AfterTargets="Build" Condition="false">
+    <Message Text="RunOctoPack = $(RunOctoPack)" />
+    <Message Text="OctoPackSkipIfNoChanges = $(OctoPackSkipIfNoChanges)" />
+    <Message Text="OctoPackContentFiles = @(OctoPackContentFiles)" />
+    <Message Text="OctoPackWrittenFiles = @(OctoPackWrittenFiles)" />
+    <Message Text="OctoPackOutputFiles = @(OctoPackOutputFiles)" />
+  </Target>
+  
+  <!-- 
+  Set item groups that OctoPack and OctoPackSkipIfNoChanges targets rely on
+  -->
+  <Target Name="OctoPackInitItemGroups">
+    <ItemGroup>
+      <OctoPackWrittenFiles Include="@(FileWrites)" Exclude="$(IntermediateOutputPath)**\*" />
+      <OctoPackWrittenFiles Include="@(FileWritesShareable)" Exclude="$(IntermediateOutputPath)**\*" />
+      
+      <OctoPackContentFiles Include="@(Content)" />
+      <OctoPackContentFiles Include="@(TypeScriptCompile)" />
+    
+      <OctoPackOutputFiles Include="$(MSBuildProjectDirectory)\obj\octopacked\*.nupkg" />
+    </ItemGroup>
+  </Target>
+  
+  <!-- 
+  Create Octopus Deploy package only if changes have been made
+  -->
+  <Target Name="OctoPackSkipIfNoChanges"
+          Condition="$(RunOctoPack) And $(OctoPackSkipIfNoChanges)"
+          Inputs="@(OctoPackWrittenFiles); @(OctoPackContentFiles)"
+          Outputs="@(OctoPackOutputFiles)"
+          DependsOnTargets="OctoPackInitItemGroups"
+          AfterTargets="Build">
+    <CallTarget Targets="OctoPack" />
+  </Target>
+  
+  <!-- 
+  Create Octopus Deploy package regardless if changes have been made or not
+  -->
+  <Target Name="OctoPackNeverSkip"
+          Condition="$(RunOctoPack) And (!$(OctoPackSkipIfNoChanges) Or '@(OctoPackOutputFiles)' == '')"
+          DependsOnTargets="OctoPackInitItemGroups"
+          AfterTargets="Build">
+    <CallTarget Targets="OctoPack" />
   </Target>
 </Project>
